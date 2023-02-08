@@ -929,7 +929,7 @@ class OnACID(object):
 
         return self
 
-    def motion_correction_online(self,template:np.array=None,save_movie:bool=False):
+    def motion_correction_online(self,template:np.array=None,save_movie:bool=False, nbits = np.float32):
         fls = self.params.get('data', 'fnames')
         
         if self.params.motion['gSig_filt'] is None:
@@ -1047,7 +1047,7 @@ class OnACID(object):
                     
                     if save_movie == True:
                         tifffile.imwrite(os.path.join(folderName,os.path.basename(fls[0]).split(sep = '.')[0]+'_MC.tif'), 
-                                         corrected_images,
+                                         corrected_images.astype(nbits),
                                   append = append, 
                                   contiguous = True,
                                   bigtiff = True)
@@ -1074,7 +1074,7 @@ class OnACID(object):
                 if template_number==0:
                     append=False
                 tifffile.imwrite(os.path.join(folderName,os.path.basename(fls[0]).split(sep='.')[0]+'_MC.tif'), 
-                                 corrected_images[0:template_number],
+                                 corrected_images[0:template_number].astype(nbits),
                           append = append, 
                           contiguous = True,
                           bigtiff = True)
