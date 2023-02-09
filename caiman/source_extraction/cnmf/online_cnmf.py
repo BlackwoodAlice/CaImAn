@@ -1115,7 +1115,11 @@ class OnACID(object):
                 for sh in mc[1]:
                     self.estimates.shifts.append([tuple(sh) for i in range(n_p)])
             else:
-                self.estimates.shifts.extend(mc[1])                
+                self.estimates.shifts.extend(mc[1])
+
+        templates_name = os.path.join(os.path.dirname(fls[0]),"MC_templates.tif")
+        tifffile.imwrite(templates_name,bin_median(Y))
+                
         img_min = Y.min()
 
         if self.params.get('online', 'normalize'):
@@ -1356,6 +1360,9 @@ class OnACID(object):
             out = cv2.VideoWriter(self.params.get('online', 'movie_name_online'),
                                   fourcc, 30, tuple([int(resize_fact*2*x) for x in self.params.get('data', 'dims')]),
                                   True)
+            
+        dims, T = get_file_size(fls[0])
+        corrected_frames = np.zeros((500,dims[0],dims[1]))
         # Iterate through the epochs
         for iter in range(epochs):
             if iter == epochs - 1 and self.params.get('online', 'stop_detection'):
@@ -1416,6 +1423,14 @@ class OnACID(object):
                         else:
                             templ = None
                             frame_cor = frame_
+                        
+                        corrected_frames[t%500] = frame_cor
+                        if t % 500 == 0:
+                            templates_name = os.path.join(os.path.dirname(fls[0]),"MC_templates.tif")
+                            tifffile.imwrite(templates_name,bin_median(corrected_frames),
+                                             append = True)
+                            corrected_frames = np.zeros((500,dims[0],dims[1]))
+                            
                         self.t_motion.append(time() - t_mot)
                         
                         if self.params.get('online', 'normalize'):
