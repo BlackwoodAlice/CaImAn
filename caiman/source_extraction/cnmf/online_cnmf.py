@@ -947,12 +947,15 @@ class OnACID(object):
 
         opts = self.params.get_group('online')
         
+        Y = caiman.load(fls[0], subindices=slice(0, opts['init_batch'],
+                 None), var_name_hdf5=self.params.get('data', 'var_name_hdf5')).astype(np.float32)
+        
         if template is None:
-            Y = caiman.load(fls[0], subindices=slice(0, opts['init_batch'],
-                     None), var_name_hdf5=self.params.get('data', 'var_name_hdf5')).astype(np.float32)
             ds_factor = np.maximum(opts['ds_factor'], 1)
             if ds_factor > 1:
                 Y = Y.resize(1./ds_factor, 1./ds_factor)
+                T = Y.shape[0]
+                dims = (Y.shape[1],Y.shape[2])
                 
             max_shifts_online = self.params.get('online', 'max_shifts_online')
             if self.params.get('motion', 'gSig_filt') is None:
@@ -963,13 +966,13 @@ class OnACID(object):
                 Y_filt = caiman.movie(Y_filt)
                 mc = Y_filt.motion_correct(max_shifts_online, max_shifts_online)
                 Y = Y.apply_shifts(mc[1])
-            if self.params.get('motion', 'pw_rigid'):
-                n_p = len([(it[0], it[1])
-                     for it in sliding_window(Y[0], self.params.get('motion', 'overlaps'), self.params.get('motion', 'strides'))])
-                for sh in mc[1]:
-                    self.estimates.shifts.append([tuple(sh) for i in range(n_p)])
-            else:
-                self.estimates.shifts.extend(mc[1])
+            # if self.params.get('motion', 'pw_rigid'):
+            #     n_p = len([(it[0], it[1])
+            #          for it in sliding_window(Y[0], self.params.get('motion', 'overlaps'), self.params.get('motion', 'strides'))])
+            #     for sh in mc[1]:
+            #         self.estimates.shifts.append([tuple(sh) for i in range(n_p)])
+            # else:
+            #     self.estimates.shifts.extend(mc[1])
             
             logging.info('Initial template initialized in ' + str(int(time()-t0)) + ' seconds')
                 
@@ -977,7 +980,13 @@ class OnACID(object):
             templ = bin_median(Y)
         else:
             templ = bin_median(high_pass_filter_space(Y, self.params.get('motion','gSig_filt')))
-        epochs = self.params.get('online', 'epochs')
+        
+        img_min = Y.min()
+        img_norm = np.std(Y, axis=0)
+        img_norm += np.median(img_norm)  # normalize data to equalize the FOV
+        
+        self.img_norm = img_norm
+        self.img_min = img_min
         
         frame_count = 0
         template_count = 0
@@ -1006,29 +1015,30 @@ class OnACID(object):
                 if self.params.get('online', 'ds_factor') > 1:
                     frame_ = cv2.resize(frame_, self.img_norm.shape[::-1])
 
-                # if self.params.get('online', 'normalize'):
-                #     frame_ -= self.img_min     # make data non-negative
+                if self.params.get('online', 'normalize'):
+                    frame_ -= self.img_min     # make data non-negative
                         
                 if self.params.get('online', 'normalize'):
                     templ *= self.img_norm
                 if self.is1p:
                     templ = high_pass_filter_space(templ, self.params.motion['gSig_filt'])
+                    
                 if self.params.get('motion', 'pw_rigid'):
                     frame_cor, shift, _, xy_grid = tile_and_correct(
-                        frame, templ, self.params.motion['strides'], self.params.motion['overlaps'],
+                        frame_, templ, self.params.motion['strides'], self.params.motion['overlaps'],
                         self.params.motion['max_shifts'], newoverlaps=None, newstrides=None,
                         upsample_factor_grid=4, upsample_factor_fft=10, show_movie=False,
                         max_deviation_rigid=self.params.motion['max_deviation_rigid'], add_to_movie=0,
                         shifts_opencv=True, gSig_filt=None, use_cuda=False, border_nan='copy')
                 else:
                     if self.is1p:
-                        frame_orig = frame.copy()
-                        frame = high_pass_filter_space(frame, self.params.motion['gSig_filt'])
+                        frame_orig = frame_.copy()
+                        frame_ = high_pass_filter_space(frame_, self.params.motion['gSig_filt'])
                     frame_cor, shift = motion_correct_iteration_fast(
-                            frame, templ, *(self.params.get('online', 'max_shifts_online'),)*2)
+                            frame_, templ, *(self.params.get('online', 'max_shifts_online'),)*2)
                     if self.is1p:
                         M = np.float32([[1, 0, shift[1]], [0, 1, shift[0]]])
-                        frame_cor = cv2.warpAffine(frame_orig, M, frame.shape[::-1],
+                        frame_cor = cv2.warpAffine(frame_orig, M, frame_.shape[::-1],
                                                    flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REFLECT)
 
                 self.estimates.shifts.append(shift)
@@ -1041,6 +1051,11 @@ class OnACID(object):
                 frame_count +=1
                 
                 if template_count ==500:
+                    
+                    img_norm = np.std(corrected_images, axis=0)
+                    img_norm += np.median(img_norm)  # normalize data to equalize the FOV
+                    self.img_norm = img_norm
+                    
                     append=True
                     if template_number==0:
                         append=False
