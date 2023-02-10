@@ -1362,7 +1362,13 @@ class OnACID(object):
                                   True)
             
         dims, T = get_file_size(fls[0])
+        
         corrected_frames = np.zeros((500,dims[0],dims[1]))
+        if t%500 == 0:
+            stack_tmpl = True
+        else:
+            stack_tmpl=False
+        
         # Iterate through the epochs
         for iter in range(epochs):
             if iter == epochs - 1 and self.params.get('online', 'stop_detection'):
@@ -1423,13 +1429,18 @@ class OnACID(object):
                         else:
                             templ = None
                             frame_cor = frame_
+
                         
-                        corrected_frames[t%500] = frame_cor
-                        if t % 500 == 0:
+                        if t % 500 == 0 and stack_tmpl == True:
                             templates_name = os.path.join(os.path.dirname(fls[0]),"MC_templates.tif")
                             tifffile.imwrite(templates_name,bin_median(corrected_frames),
                                              append = True)
                             corrected_frames = np.zeros((500,dims[0],dims[1]))
+                            corrected_frames[t % 500]=frame_cor
+                            stack_tmpl = True
+                        
+                        elif stack_tmpl == True:
+                            corrected_frames[t % 500]=frame_cor
                             
                         self.t_motion.append(time() - t_mot)
                         
