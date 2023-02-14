@@ -947,7 +947,7 @@ class OnACID(object):
 
         opts = self.params.get_group('online')
         
-        Y = caiman.load(fls[0], subindices=slice(0, opts['init_batch'],
+        Y = caiman.base.movies.load(fls[0], subindices=slice(0, opts['init_batch'],
                  None), var_name_hdf5=self.params.get('data', 'var_name_hdf5')).astype(np.float32)
         
         if template is None:
