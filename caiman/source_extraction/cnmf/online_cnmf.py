@@ -936,7 +936,7 @@ class OnACID(object):
             self.is1p=False
         else:
             self.is1p=True
-               
+        
         if len(fls)>1:
             fls = [fls[0]]
         dims,T = get_file_size(fls[0])
@@ -947,7 +947,7 @@ class OnACID(object):
 
         opts = self.params.get_group('online')
         
-        Y = caiman.base.movies.load(fls[0], subindices=slice(0, opts['init_batch'],
+        Y = caiman.load(fls[0], subindices=slice(0, opts['init_batch'],
                  None), var_name_hdf5=self.params.get('data', 'var_name_hdf5')).astype(np.float32)
         
         if template is None:
@@ -966,13 +966,6 @@ class OnACID(object):
                 Y_filt = caiman.movie(Y_filt)
                 mc = Y_filt.motion_correct(max_shifts_online, max_shifts_online)
                 Y = Y.apply_shifts(mc[1])
-            # if self.params.get('motion', 'pw_rigid'):
-            #     n_p = len([(it[0], it[1])
-            #          for it in sliding_window(Y[0], self.params.get('motion', 'overlaps'), self.params.get('motion', 'strides'))])
-            #     for sh in mc[1]:
-            #         self.estimates.shifts.append([tuple(sh) for i in range(n_p)])
-            # else:
-            #     self.estimates.shifts.extend(mc[1])
             
             logging.info('Initial template initialized in ' + str(int(time()-t0)) + ' seconds')
                 
@@ -1020,8 +1013,6 @@ class OnACID(object):
                         
                 if self.params.get('online', 'normalize'):
                     templ *= self.img_norm
-                if self.is1p:
-                    templ = high_pass_filter_space(templ, self.params.motion['gSig_filt'])
                     
                 if self.params.get('motion', 'pw_rigid'):
                     frame_cor, shift, _, xy_grid = tile_and_correct(
@@ -1072,10 +1063,10 @@ class OnACID(object):
                                   contiguous = True,
                                   bigtiff = True)
                     
-                    if (self.params.get('motion','gSig_filt') is None):
+                    if (self.params.motion['gSig_filt'] is None):
                         templ = bin_median(corrected_images)
                     else:
-                        templ = bin_median(high_pass_filter_space(corrected_images, self.params.get('motion','gSig_filt')))
+                        templ = bin_median(high_pass_filter_space(corrected_images, self.params.motion['gSig_filt']))
                     
                     logging.info('Processed and saved '+str(frame_count)+" frames in " + str(int(time()-t0)) +' seconds')
                     corrected_images = np.zeros((500,dims[0],dims[1]))
