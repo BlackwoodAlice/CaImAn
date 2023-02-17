@@ -1375,7 +1375,7 @@ class movie(ts.timeseries):
 def load_multiseries_tiff(file_name: Union[str, List[str]],
                           initialFrame: int=0, 
                           step: int=1, 
-                          finalFrame: int=None, 
+                          finalFrame = None, 
                           outtype = np.float32):
     """
     load any tiff file, multiseries or multipage. Supports the .tif and .tiff formats
@@ -1409,44 +1409,48 @@ def load_multiseries_tiff(file_name: Union[str, List[str]],
             #outputImage varible initialization
             outputImage = None
             
+            if finalFrame is None:
+                dims, finalFrame = cm.source_extraction.cnmf.utilities.get_file_size(file_name)
+            
+            return tffl.asarray(key=slice(initialFrame,finalFrame,step))
+            
             #For cycle that iterates over the series
-            for seriesNr in range(0,len(tffl.series)):
-                seriesFrames = tffl.series[seriesNr].shape[0] # Number of frames in the series
-                
-                if (outputImage is None):   #If the first frame was still not found
-                    if seriesFrames <= initialFrame:    #If the initialFrame is not in the open series continue
-                        initialFrame -= seriesFrames
-                    else:                               #Else, get either all the series or just the frames until the finalFrame requested
-                        if(finalFrame is not None and finalFrame<=seriesFrames):
-                            outputImage = tffl.series[seriesNr].asarray(key=range(initialFrame,finalFrame,step))
-                            break
-                        else:
-                            outputImage = tffl.series[seriesNr].asarray(key=range(initialFrame,seriesFrames,step))
+            # for seriesNr in range(0,len(tffl.series)):
+            #     seriesFrames = len(tffl.series[seriesNr].pages) # Number of frames in the series
+            #     if (outputImage is None):   #If the first frame was still not found
+            #         if seriesFrames <= initialFrame:    #If the initialFrame is not in the open series continue
+            #             initialFrame -= seriesFrames
+            #         else:                               #Else, get either all the series or just the frames until the finalFrame requested
+            #             if(finalFrame is not None and finalFrame<=seriesFrames):
+            #                 outputImage = tffl.series[seriesNr].asarray(key=range(initialFrame,finalFrame,step))
+            #                 break
+            #             else:
+            #                 outputImage = tffl.series[seriesNr].asarray(key=range(initialFrame,seriesFrames,step))
 
-                    # If series are single paged, create an extra axis to stack the frames on
-                    if outputImage is not None and len(outputImage.shape)==2:
-                        outputImage = outputImage[np.newaxis,:, :]
+            #         # If series are single paged, create an extra axis to stack the frames on
+            #         if outputImage is not None and len(outputImage.shape)==2:
+            #             outputImage = outputImage[np.newaxis,:, :]
                 
-                else:   #If some frames are already obtained from previous series, stack next frames
-                    if(finalFrame is not None and T+seriesFrames>=finalFrame): #If this series has the finalFrame chosen...
-                        finalFrame = finalFrame - T
-                        if(finalFrame >0):
-                            newStack = tffl.series[seriesNr].asarray(key=range(0,finalFrame,step)) #Get next frames
-                            if len(newStack.shape)==2 and len(outputImage.shape)==3: #If the newStack is only one frame, change this into an 3Dstack
-                                outputImage = np.vstack((outputImage,newStack[np.newaxis,:, :]))
-                            else:
-                                outputImage = np.vstack((outputImage,newStack))
-                        break
+            #     else:   #If some frames are already obtained from previous series, stack next frames
+            #         if(finalFrame is not None and T+seriesFrames>=finalFrame): #If this series has the finalFrame chosen...
+            #             finalFrame = finalFrame - T
+            #             if(finalFrame >0):
+            #                 newStack = tffl.series[seriesNr].asarray(key=range(0,finalFrame,step)) #Get next frames
+            #                 if len(newStack.shape)==2 and len(outputImage.shape)==3: #If the newStack is only one frame, change this into an 3Dstack
+            #                     outputImage = np.vstack((outputImage,newStack[np.newaxis,:, :]))
+            #                 else:
+            #                     outputImage = np.vstack((outputImage,newStack))
+            #             break
                     
-                    else:   #Get all frames from the series
-                        newStack = tffl.series[seriesNr].asarray(key=range(0,seriesFrames,step))
-                        if len(newStack.shape)==2 and len(outputImage.shape)==3:    #If there is only one frame turn it into a 3D array.
-                            outputImage = np.vstack((outputImage,newStack[np.newaxis,:, :]))
-                        else:
-                            outputImage = np.vstack((outputImage,newStack))
+            #         else:   #Get all frames from the series
+            #             newStack = tffl.series[seriesNr].asarray(key=range(0,seriesFrames,step))
+            #             if len(newStack.shape)==2 and len(outputImage.shape)==3:    #If there is only one frame turn it into a 3D array.
+            #                 outputImage = np.vstack((outputImage,newStack[np.newaxis,:, :]))
+            #             else:
+            #                 outputImage = np.vstack((outputImage,newStack))
                             
-                #Sum up the frames to which they were iterated
-                T += seriesFrames
+            #     #Sum up the frames to which they were iterated
+            #     T += seriesFrames
         else:
             logging.error("The file: " + os.path.basename(file_name) + " is not a TIFF file")
             return None
@@ -1595,35 +1599,43 @@ def load(file_name: Union[str, List[str]],
         elif extension in ['.tif', '.tiff', '.btf']:  # load tif file
             with tifffile.TiffFile(file_name) as tffl:
                 
+                multi_page = True if tffl.series[0].shape[0] > 1 else False
+                
                 if len(tffl.series)>1:
                     logging.warning('Your tif file is multiseries. Performance may be affected.')
                     
                     if subindices is not None:
                         if isinstance(subindices,list):
-                            if len(subindices==1):
+                            if len(subindices)==1:
                                 subindices = slice(0,subindices[0],1)
                             elif len(subindices)==2:
                                 subindices = slice(subindices[0],subindices[1],1)
                             else:
                                 subindices = slice(subindices[0],subindices[1],subindices[2])
+                            
+                            input_arr = load_multiseries_tiff(file_name)
                                 
-                        if isinstance(subindices,slice):
+                        elif isinstance(subindices,slice):
                             if subindices.start==None:
                                 input_arr = load_multiseries_tiff(file_name,initialFrame=0,step=subindices.step,finalFrame=subindices.stop)
                             else:
                                 input_arr = load_multiseries_tiff(file_name,initialFrame=subindices.start,step=subindices.step,finalFrame=subindices.stop)
+                            
+                            input_arr = load_multiseries_tiff(file_name)
+                            
                         else:
                             #logging.error('Cannot open image indices not in slice or in list type')
-                            raise Exception('Cannot open image indices not in slice or in list type')
+                            raise Exception('Indices should be list (start, stop, step) or slice')
                     else:
                         input_arr = load_multiseries_tiff(file_name)
+                        #
                         
-                multi_page = True if tffl.series[0].shape[0] > 1 else False
-                if len(tffl.pages) == 1:
+                
+                elif len(tffl.pages) == 1:
                     logging.warning('Your tif file is saved a single page' +
                                     'file. Performance will be affected')
                     multi_page = False
-                if subindices is not None:
+                elif subindices is not None:
                     # if isinstance(subindices, (list, tuple)): # is list or tuple:
                     if isinstance(subindices, list):  # is list or tuple:
                         if multi_page:
@@ -2429,3 +2441,38 @@ def load_iter(file_name, subindices=None, var_name_hdf5: str = 'mov', outtype=np
     else:
         logging.error(f"File request:[{file_name}] not found!")
         raise Exception('File not found!')
+
+
+def get_window_from_movie(file_name, cornersCoordinates, shape):
+    """
+    Get a window from an image stack 
+    
+    Variables:
+        file_name: name of file. Possible extensions are .tif and .tiff
+        x1 and x2: Minimum and maximum values in width to take form iamge stack
+        y1 and y2: Minimum and maximum values in height to take form iamge stack
+        blockSize: block of images to open at a time
+        outtype: The data type for outputted frames 
+        
+    Returns:
+        outputImage: window from an image stack
+    """
+    import matplotlib.pyplot as plt
+    if os.path.exists(file_name):
+        extension = os.path.splitext(file_name)[1].lower()
+        if extension in ('.tif', '.tiff','.nd2'):
+            dims,T = cm.source_extraction.cnmf.utilities.get_file_size(file_name)
+            outputImage = np.zeros((T,shape[0],shape[1]))
+            for i in range(0,T,1000):
+                if i+1000 < T:
+                    outputImage[int(i):int((i+1000))] = load(file_name,subindices = slice(i,
+                                        i+1000,1))[0:1000,int(cornersCoordinates[0]):int(cornersCoordinates[1]),
+                                                   int(cornersCoordinates[2]):int(cornersCoordinates[3])]
+                else:
+                    outputImage[int(i):int((T))] = load(file_name,subindices = slice(i,
+                                        T,1))[0:1000,int(cornersCoordinates[0]):int(cornersCoordinates[1]),
+                                                   int(cornersCoordinates[2]):int(cornersCoordinates[3])]
+        return outputImage
+    else:
+        logging.error('Specified file does not exist')
+        return None
