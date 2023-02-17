@@ -184,11 +184,11 @@ def volspike(pars):
     print(f'Now processing cell number {cell_n}')
     
     # load the movie in C-order mermory mapping file
-    Yr, dims, T = cm.load_memmap(fnames)
-    if bw.shape == dims:
-        images = np.reshape(Yr.T, [T] + list(dims), order='F')
-    else:
-        raise Exception('Dimensions of movie and ROIs do not accord')
+    #Yr, dims, T = cm.load_memmap(fnames)
+    # if bw.shape == dims:
+    #     images = np.reshape(Yr.T, [T] + list(dims), order='F')
+    # else:
+    #     raise Exception('Dimensions of movie and ROIs do not accord')
         
     # extract the context region from the entire movie
     bwexp = dilation(bw, np.ones([args['context_size'], args['context_size']]), shift_x=True, shift_y=True)
@@ -196,7 +196,23 @@ def volspike(pars):
     Yinds = np.where(np.any(bwexp > 0, axis=0) > 0)[0]
     bw = bw[Xinds[0]:Xinds[-1] + 1, Yinds[0]:Yinds[-1] + 1]
     notbw = 1 - dilation(bw, disk(args['censor_size']))
-    data = np.array(images[:, Xinds[0]:Xinds[-1] + 1, Yinds[0]:Yinds[-1] + 1])
+    # data = np.array(images[:, Xinds[0]:Xinds[-1] + 1, Yinds[0]:Yinds[-1] + 1])
+    # bw = (bw > 0)
+    # notbw = (notbw > 0)
+    # ref = np.median(data[:500, :, :], axis=0)
+    # bwexp[Xinds[0]:Xinds[-1] + 1, Yinds[0]:Yinds[-1] + 1] = True
+    
+    center = [Xinds[-1]-Xinds[0],Yinds[-1]-Yinds[0]]
+    data = cm.base.movies.get_window_from_movie(fnames, cornersCoordinates = [Xinds[0], Xinds[-1]+1, Yinds[0], Yinds[-1]+1], shape = bw.shape)
+    T = data.shape[0]
+    dims = data[0].shape
+    
+    # if bw.shape == dims:
+    #     data = np.reshape(Yr.T, [T] + list(dims), order='C')
+    # else:
+    #     raise Exception('Dimensions of movie and ROIs do not accord')
+    
+    #data = np.array(images[:, Xinds[0]:Xinds[-1] + 1, Yinds[0]:Yinds[-1] + 1])
     bw = (bw > 0)
     notbw = (notbw > 0)
     ref = np.median(data[:500, :, :], axis=0)
@@ -248,13 +264,17 @@ def volspike(pars):
                                           pnorm=args['pnorm'], threshold=args['threshold'], 
                                           min_spikes=args['min_spikes'], do_plot=False)
 
-    output['rawROI']['t'] = t0.copy()
+    t=t0.copy()
+    output['rawROI']['t'] = t.copy()
     output['rawROI']['ts'] = ts.copy()
     output['rawROI']['spikes'] = spikes.copy()
     if weights_init is None:
         output['rawROI']['weights'] = bw.copy()
+        weights = np.concatenate([[0], np.ndarray.flatten(bw.copy().astype('float'))])
     else:
         output['rawROI']['weights'] = weights_init.copy()
+        weights = np.concatenate([[0], np.ndarray.flatten(weights_init.copy().astype('float'))])
+        
     output['rawROI']['t'] = output['rawROI']['t'] * np.mean(t0[output['rawROI']['spikes']]) / np.mean(
         output['rawROI']['t'][output['rawROI']['spikes']])  # correct shrinkage
     output['rawROI']['templates'] = templates
@@ -363,9 +383,10 @@ def volspike(pars):
         locality = True
     
     # weights in the FOV
-    weights = np.reshape(weights[1:],ref.shape, order='C')
-    weights_FOV = np.zeros(images.shape[1:])
-    weights_FOV[Xinds[0]:Xinds[-1] + 1, Yinds[0]:Yinds[-1] + 1] = weights
+    # weights = np.reshape(weights[1:],ref.shape, order='C')
+    # weights_FOV = np.zeros(ref.shape[1:])
+    # weights_FOV[Xinds[0]:Xinds[-1] + 1, Yinds[0]:Yinds[-1] + 1] = weights
+    weights_FOV = np.reshape(weights[1:],ref.shape, order='C')
 
     # subthreshold activity extraction    
     t_sub = t.copy() - t_rec

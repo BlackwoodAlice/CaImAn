@@ -11,9 +11,6 @@ import tifffile
 import logging
 from scipy import interpolate
 import caiman as cm
-import matplotlib.pyplot as plt
-from ..cnmf.initialization import downscale
-from Files_Handler import load_caiman_movie, get_imageStack_size
 
 ##########################################################################################
 #    BACKGROUND FUNCTIONS
@@ -133,7 +130,7 @@ def voltage_preprocessing(fnames, saveDir = None, nbits = np.float16):
         
         logging.info("Background removal of  "+str(fnames[0]))
         #Open images as 16bit caiman movies. This is normally a tif file but in this way, it prevents errors if the file is not .tif
-        mov = cm.load(fnames)
+        mov = cm.base.movies.load(fnames)
         
         #Create folder for saving denoising results
         if saveDir == None:
@@ -144,22 +141,22 @@ def voltage_preprocessing(fnames, saveDir = None, nbits = np.float16):
             os.makedirs(folderName)
         
         #Remove photobleach effect
-        mov,splineFit = splineBackground(mov.astype(np.float16))
+        mov,splineFit = splineBackground(mov)
         
         np.save(os.path.join(folderName, 'spline.npy'),splineFit)
         
         logging.info("Spline background removal done")
         
         #### Median detrending
-        mov,medianVector = median_trend_removal(mov.astype(np.float16))
+        mov,medianVector = median_trend_removal(mov)
         
         np.save(os.path.join(folderName, 'medianTrend.npy'),medianVector)
         
         logging.info('Median detrending done')
         
         #Save denoised image
-        output_filename = os.path.join(saveDir, 'Denoised.tif')
-        tifffile.imwrite(output_filename, mov.astype(nbits)),
+        output_filename = os.path.join(folderName, 'Denoised.tif')
+        tifffile.imwrite(output_filename, mov.astype(nbits),
                           append = False,
                           bigtiff=True,
                           contiguous = True)
