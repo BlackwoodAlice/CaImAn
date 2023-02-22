@@ -900,7 +900,7 @@ class Estimates(object):
             for field in ['C', 'S', 'YrA', 'R', 'F_dff', 'g', 'bl', 'c1', 'neurons_sn',
                           'lam', 'cnn_preds', 'SNR_comp', 'r_values', 'coordinates']:
                 if getattr(self, field) is not None:
-                    if isinstance(getattr(self, field), list):
+                    if isinstance(getattr(self, field), list) or isinstance(getattr(self, field), float):
                         setattr(self, field, np.array(getattr(self, field)))
                     if len(getattr(self, field)) == self.A.shape[-1]:
                         if save_discarded_components:

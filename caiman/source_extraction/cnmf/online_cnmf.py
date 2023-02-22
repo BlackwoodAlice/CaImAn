@@ -392,6 +392,88 @@ class OnACID(object):
         return self
 
     @profile
+    def deconvolve_next(self, t, frame_in, num_iters_hals=3):
+        """
+        This method deconcolves the next frame using the CaImAn online algorithm and
+        updates the object.
+
+        Args
+            t : int
+                time measured in number of frames
+
+            frame_in : array
+                flattened array of shape (x * y [ * z],) containing the t-th image.
+
+            num_iters_hals: int, optional
+                maximal number of iterations for HALS (NNLS via blockCD)
+        """
+
+        t_start = time()
+
+        # locally scoped variables for brevity of code and faster look up
+        nb_ = self.params.get('init', 'nb')
+        Ab_ = self.estimates.Ab
+        mbs = self.params.get('online', 'minibatch_shape')
+        ssub_B = self.params.get('init', 'ssub_B') * self.params.get('init', 'ssub')
+        d1, d2 = self.estimates.dims
+        expected_comps = self.params.get('online', 'expected_comps')
+        frame = frame_in.astype(np.float32)
+
+        if (not self.params.get('online', 'simultaneously')) or self.params.get('preprocess', 'p') == 0:
+            # get noisy fluor value via NNLS (project data on shapes & demix)
+            C_in = self.estimates.noisyC[:self.M, t - 1].copy()
+            if self.is1p:
+                self.estimates.C_on[:self.M, t], self.estimates.noisyC[:self.M, t] = demix1p(
+                    frame, self.estimates.Ab, C_in, self.estimates.AtA, Atb=self.estimates.Atb,
+                    AtW=self.estimates.AtW, AtWA=self.estimates.AtWA, iters=num_iters_hals,
+                    groups=self.estimates.groups, ssub_B=ssub_B, 
+                    downscale_matrix=self.estimates.downscale_matrix if ssub_B > 1 else None)
+            else:
+                self.estimates.C_on[:self.M, t], self.estimates.noisyC[:self.M, t] = HALS4activity(
+                    frame, self.estimates.Ab, C_in, self.estimates.AtA, iters=num_iters_hals, groups=self.estimates.groups)
+            if self.params.get('preprocess', 'p'):
+                # denoise & deconvolve
+                for i, o in enumerate(self.estimates.OASISinstances):
+                    o.fit_next(self.estimates.noisyC[nb_ + i, t])
+                    self.estimates.C_on[nb_ + i, t - o.get_l_of_last_pool() +
+                              1: t + 1] = o.get_c_of_last_pool()
+
+        else:
+            if self.is1p:
+                raise NotImplementedError(
+                    'simultaneous demixing and deconvolution not implemented yet for CNMF-E')
+            # update buffer, initialize C with previous value
+            self.estimates.C_on[:, t] = self.estimates.C_on[:, t - 1]
+            self.estimates.noisyC[:, t] = self.estimates.C_on[:, t - 1]
+            self.estimates.AtY_buf = np.concatenate((self.estimates.AtY_buf[:, 1:], self.estimates.Ab.T.dot(frame)[:, None]), 1) \
+                if self.params.get('online', 'n_refit') else self.estimates.Ab.T.dot(frame)[:, None]
+            # demix, denoise & deconvolve
+            (self.estimates.C_on[:self.M, t + 1 - mbs:t + 1], self.estimates.noisyC[:self.M, t + 1 - mbs:t + 1],
+                self.estimates.OASISinstances) = demix_and_deconvolve(
+                self.estimates.C_on[:self.M, t + 1 - mbs:t + 1],
+                self.estimates.noisyC[:self.M, t + 1 - mbs:t + 1],
+                self.estimates.AtY_buf, self.estimates.AtA, self.estimates.OASISinstances, iters=num_iters_hals,
+                n_refit=self.params.get('online', 'n_refit'))
+            for i, o in enumerate(self.estimates.OASISinstances):
+                self.estimates.C_on[nb_ + i, t - o.get_l_of_last_pool() + 1: t +
+                          1] = o.get_c_of_last_pool()
+
+        #self.estimates.mean_buff = self.estimates.Yres_buf.mean(0)
+        res_frame = frame - self.estimates.Ab.dot(self.estimates.C_on[:self.M, t])
+        if self.is1p:
+            self.estimates.b0 = self.estimates.b0 * (t-1)/t + res_frame/t
+            res_frame -= self.estimates.b0
+            res_frame -= (self.estimates.W.dot(res_frame) if ssub_B == 1 else
+                          self.estimates.upscale_matrix.dot(self.estimates.W.dot(
+                            self.estimates.downscale_matrix.dot(res_frame))))
+        mn_ = self.estimates.mn.copy()
+        self.estimates.mn = (t-1)/t*self.estimates.mn + res_frame/t
+        self.estimates.vr = (t-1)/t*self.estimates.vr + (res_frame - mn_)*(res_frame - self.estimates.mn)/t
+        self.estimates.sn = np.sqrt(self.estimates.vr)
+
+        return self
+    
+    @profile
     def fit_next(self, t, frame_in, num_iters_hals=3):
         """
         This method fits the next frame using the CaImAn online algorithm and
@@ -929,7 +1011,7 @@ class OnACID(object):
 
         return self
 
-    def motion_correction_online(self,template:np.array=None,save_movie:bool=False, nbits = np.float32):
+    def motion_correction_online(self,template:np.array=None,save_movie:bool=False, nbits = np.float32, save_dir = None):
         fls = self.params.get('data', 'fnames')
         
         if self.params.motion['gSig_filt'] is None:
@@ -947,9 +1029,10 @@ class OnACID(object):
 
         opts = self.params.get_group('online')
         
-        Y = caiman.load(fls[0], subindices=slice(0, opts['init_batch'],
+
+        Y = caiman.base.movies.load(fls[0], subindices=slice(0, opts['init_batch'],
                  None), var_name_hdf5=self.params.get('data', 'var_name_hdf5')).astype(np.float32)
-        
+
         if template is None:
             ds_factor = np.maximum(opts['ds_factor'], 1)
             if ds_factor > 1:
@@ -988,7 +1071,11 @@ class OnACID(object):
         corrected_images = np.zeros((500,dims[0],dims[1])) #Variable of corrected frames to save new images and for new template
         
         #Create folder to save results (images and files) of the motion correction
-        folderName = os.path.join(os.path.dirname(fls[0]),'MC Results')
+        templateName = os.path.join(os.path.dirname(fls[0]),os.path.basename(fls[0]).split('.')[0] + '_MC Results')
+        if save_dir == None:
+            folderName = os.path.join(os.path.dirname(fls[0]),os.path.basename(fls[0]).split('.')[0] + '_MC Results')
+        else:
+            folderName = save_dir
         
         if (os.path.exists(folderName)==False):
             os.makedirs(folderName)
@@ -1011,8 +1098,8 @@ class OnACID(object):
                 if self.params.get('online', 'normalize'):
                     frame_ -= self.img_min     # make data non-negative
                         
-                if self.params.get('online', 'normalize'):
-                    templ *= self.img_norm
+                # if self.params.get('online', 'normalize'):
+                #     templ *= self.img_norm
                     
                 if self.params.get('motion', 'pw_rigid'):
                     frame_cor, shift, _, xy_grid = tile_and_correct(
@@ -1057,7 +1144,7 @@ class OnACID(object):
                                   append = append, 
                                   contiguous = True,
                                   bigtiff = True)
-                        tifffile.imwrite(os.path.join(folderName,'MC_templates.tif'), 
+                        tifffile.imwrite(os.path.join(templateName,'MC_templates.tif'), 
                                          templ,
                                   append = append, 
                                   contiguous = True,
@@ -1218,6 +1305,7 @@ class OnACID(object):
                                         (0.001, 100-0.005))
             #self.bnd_BG = np.percentile(self.estimates.b.dot(self.estimates.f),
             #                            (0.001, 100-0.001))
+        
         return self
 
     def save(self,filename):
@@ -1276,6 +1364,132 @@ class OnACID(object):
         return frame_cor
 
 
+    def deconvolve_pre_initialized(self, model_LN=None, **kwargs):
+        """
+        Run deconvolution and background correction iterativelly on pre-initialized spatial footprints.
+        Only temporal traces will be added and changed.
+        """
+        
+        fls = self.params.get('data', 'fnames')
+        init_batch = self.params.get('online', 'init_batch')
+        
+        epochs = self.params.get('online', 'epochs')
+        
+        extra_files = len(fls) - 1
+        init_files = 1
+        
+        self.Ab_epoch:List = []
+        t_online = []
+        ssub_B = self.params.get('init', 'ssub_B') * self.params.get('init', 'ssub')
+        d1, d2 = self.params.get('data', 'dims')
+        max_shifts_online = self.params.get('online', 'max_shifts_online')
+        if extra_files == 0:     # check whether there are any additional files
+            process_files = fls[:init_files]     # end processing at this file
+            init_batc_iter = [init_batch]         # place where to start
+        else:
+            process_files = fls[:init_files + extra_files]   # additional files
+            # where to start reading at each file
+            init_batc_iter = [init_batch] + [0]*extra_files
+        if self.params.get('online', 'save_online_movie') + self.params.get('online', 'show_movie'):
+            resize_fact = 2
+            fourcc = cv2.VideoWriter_fourcc(*self.params.get('online', 'opencv_codec'))
+            out = cv2.VideoWriter(self.params.get('online', 'movie_name_online'),
+                                  fourcc, 30, tuple([int(resize_fact*2*x) for x in self.params.get('data', 'dims')]),
+                                  True)
+        
+        init_files = 1
+        t = init_batch
+        dims, T = get_file_size(fls[0])
+        
+        # Iterate through the epochs
+        for iter in range(epochs):
+            if iter == epochs - 1 and self.params.get('online', 'stop_detection'):
+                self.params.set('online', {'update_num_comps': False})
+            logging.info(f"Searching for new components set to: {self.params.get('online', 'update_num_comps')}")
+            if iter > 0:
+                # if not on first epoch process all files from scratch
+                process_files = fls[:init_files + extra_files]
+                init_batc_iter = [0] * (extra_files + init_files)
+
+        #     Go through all files
+            for file_count, ffll in enumerate(process_files):
+                logging.warning('Now processing file {}'.format(ffll))
+                Y_ = caiman.base.movies.load_iter(
+                    ffll, var_name_hdf5=self.params.get('data', 'var_name_hdf5'),
+                    subindices=slice(init_batc_iter[file_count], None, None))
+                
+
+                old_comps = self.N     # number of existing components
+                frame_count = -1
+                while True:   # process each file
+                    try:
+                        frame = next(Y_)
+
+                        frame_count += 1
+                        t_frame_start = time()
+                        if np.isnan(np.sum(frame)):
+                            raise Exception('Frame ' + str(frame_count) +
+                                            ' contains NaN')
+                        if t % 500 == 0:
+                            logging.info('Epoch: ' + str(iter + 1) + '. ' + str(t) +
+                                         ' frames have beeen processed in total. ')
+                            old_comps = self.N
+
+                        # Downsample and normalize
+                        frame_ = frame.copy().astype(np.float32)
+                        if self.params.get('online', 'ds_factor') > 1:
+                            frame_ = cv2.resize(frame_, self.img_norm.shape[::-1])
+
+                        if self.params.get('online', 'normalize'):
+                            frame_ -= self.img_min     # make data non-negative
+                        
+                        if self.params.get('online', 'normalize'):
+                            frame_ = frame_/self.img_norm
+                        # Fit next frame
+                        self.deconvolve_next(t, frame_.reshape(-1, order='F'))
+
+                        t += 1
+                    except  (StopIteration, RuntimeError):
+                        break
+        
+            self.Ab_epoch.append(self.estimates.Ab.copy())
+
+        if self.params.get('online', 'normalize'):
+            self.estimates.Ab = csc_matrix(self.estimates.Ab.multiply(
+                self.img_norm.reshape(-1, order='F')[:, np.newaxis]))
+        self.estimates.A, self.estimates.b = self.estimates.Ab[:, self.params.get('init', 'nb'):], self.estimates.Ab[:, :self.params.get('init', 'nb')].toarray()
+        self.estimates.C, self.estimates.f = self.estimates.C_on[self.params.get('init', 'nb'):self.M, t - t //
+                         epochs:t], self.estimates.C_on[:self.params.get('init', 'nb'), t - t // epochs:t]
+        noisyC = self.estimates.noisyC[self.params.get('init', 'nb'):self.M, t - t // epochs:t]
+        self.estimates.YrA = noisyC - self.estimates.C
+        if self.estimates.OASISinstances is not None:
+            self.estimates.bl = [osi.b for osi in self.estimates.OASISinstances]
+            self.estimates.S = np.stack([osi.s for osi in self.estimates.OASISinstances])
+            self.estimates.S = self.estimates.S[:, t - t // epochs:t]
+        else:
+            self.estimates.bl = [0] * self.estimates.C.shape[0]
+            self.estimates.S = np.zeros_like(self.estimates.C)
+        if self.params.get('online', 'ds_factor') > 1:
+            dims = frame.shape
+            self.estimates.A = hstack([coo_matrix(cv2.resize(self.estimates.A[:, i].reshape(self.estimates.dims, order='F').toarray(),
+                                                            dims[::-1]).reshape(-1, order='F')[:,None]) for i in range(self.N)], format='csc')
+            if self.estimates.b.shape[-1] > 0:
+                self.estimates.b = np.concatenate([cv2.resize(self.estimates.b[:, i].reshape(self.estimates.dims, order='F'),
+                                                              dims[::-1]).reshape(-1, order='F')[:,None] for i in range(self.params.get('init', 'nb'))], axis=1)
+            else:
+                self.estimates.b = np.resize(self.estimates.b, (self.estimates.A.shape[0], 0))
+            if self.estimates.b0 is not None:
+                b0 = self.estimates.b0.reshape(self.estimates.dims, order='F')
+                b0 = cv2.resize(b0, dims[::-1])
+                self.estimates.b0 = b0.reshape((-1, 1), order='F')
+            self.params.set('data', {'dims': dims})
+            self.estimates.dims = dims
+        self.t_online = t_online
+        self.estimates.C_on = self.estimates.C_on[:self.M]
+        self.estimates.noisyC = self.estimates.noisyC[:self.M]
+
+        return self
+    
     def fit_online(self, **kwargs):
         """Implements the caiman online algorithm on the list of files fls. The
         files are taken in alpha numerical order and are assumed to each have
@@ -1343,6 +1557,7 @@ class OnACID(object):
         else:
             model_LN = None
         epochs = self.params.get('online', 'epochs')
+        
         self.initialize_online(model_LN=model_LN)
         self.t_init += time()
         extra_files = len(fls) - 1
@@ -1367,13 +1582,15 @@ class OnACID(object):
                                   fourcc, 30, tuple([int(resize_fact*2*x) for x in self.params.get('data', 'dims')]),
                                   True)
             
+        
         dims, T = get_file_size(fls[0])
         
-        corrected_frames = np.zeros((500,dims[0],dims[1]))
-        if t%500 == 0:
-            stack_tmpl = True
-        else:
-            stack_tmpl=False
+        if self.params.get('online', 'motion_correct'):
+            corrected_frames = np.zeros((500,dims[0],dims[1]))
+            if t%500 == 0:
+                stack_tmpl = True
+            else:
+                stack_tmpl=False
         
         # Iterate through the epochs
         for iter in range(epochs):
@@ -1391,6 +1608,7 @@ class OnACID(object):
                 Y_ = caiman.base.movies.load_iter(
                     ffll, var_name_hdf5=self.params.get('data', 'var_name_hdf5'),
                     subindices=slice(init_batc_iter[file_count], None, None))
+                
 
                 old_comps = self.N     # number of existing components
                 frame_count = -1
@@ -1436,17 +1654,17 @@ class OnACID(object):
                             templ = None
                             frame_cor = frame_
 
-                        
-                        if t % 500 == 0 and stack_tmpl == True:
-                            templates_name = os.path.join(os.path.dirname(fls[0]),"MC_templates.tif")
-                            tifffile.imwrite(templates_name,bin_median(corrected_frames),
-                                             append = True)
-                            corrected_frames = np.zeros((500,dims[0],dims[1]))
-                            corrected_frames[t % 500]=frame_cor
-                            stack_tmpl = True
-                        
-                        elif stack_tmpl == True:
-                            corrected_frames[t % 500]=frame_cor
+                        if self.params.get('online', 'motion_correct'):
+                            if t % 500 == 0 and stack_tmpl == True:
+                                templates_name = os.path.join(os.path.dirname(fls[0]),"MC_templates.tif")
+                                tifffile.imwrite(templates_name,bin_median(corrected_frames),
+                                                 append = True)
+                                corrected_frames = np.zeros((500,dims[0],dims[1]))
+                                corrected_frames[t % 500]=frame_cor
+                                stack_tmpl = True
+                            
+                            elif stack_tmpl == True:
+                                corrected_frames[t % 500]=frame_cor
                             
                         self.t_motion.append(time() - t_mot)
                         
