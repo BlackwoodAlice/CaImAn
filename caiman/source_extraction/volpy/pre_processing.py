@@ -105,14 +105,14 @@ def median_trend_removal(imgs,window = 10):
     
     return outputImage,medianVector
 
-def voltage_preprocessing(fnames, saveDir = None, nbits = np.float16):
+def voltage_preprocessing(fnames, save_dir = None, nbits = np.float16, window = 10):
     """
     Remove photobleaching and shot noise effects
     
     Variables:
         filename: Name of the file of the file to analyze. Normally it is a motion corrected file.
         ds: Downscale factors
-        saveDir: Directory to save the images. If None is given, the denoising results are saved in a folder
+        save_dir: Directory to save the images. If None is given, the denoising results are saved in a folder
                 folder called 'Denoise results' and the Denoised image is saved in the directory of that folder.
         saveAll: If True saves both intermediate steps as 3D images. If False, only saves the last denoised image.
         
@@ -133,24 +133,31 @@ def voltage_preprocessing(fnames, saveDir = None, nbits = np.float16):
         mov = cm.base.movies.load(fnames)
         
         #Create folder for saving denoising results
-        if saveDir == None:
-            saveDir = os.path.dirname(fnames[0])
-        folderName = os.path.join(saveDir, "Denoise results")
+        if save_dir == None:
+            save_dir = os.path.dirname(fnames[0])
+            folderName = os.path.join(save_dir, "Denoise results")
         
-        if os.path.exists(folderName) == False:
-            os.makedirs(folderName)
+            if os.path.exists(folderName) == False:
+                os.makedirs(folderName)
+            else:
+                folderName = os.path.join(os.path.dirname(fnames[0]), os.path.basename(fnames[0]) + "_Denoise results")
+                os.makedirs(folderName, exist_ok=True)
+        else:
+            folderName = save_dir
+        
+        noiseName = os.path.join(save_dir, "Denoise results")
         
         #Remove photobleach effect
         mov,splineFit = splineBackground(mov)
         
-        np.save(os.path.join(folderName, 'spline.npy'),splineFit)
+        np.save(os.path.join(noiseName, 'spline.npy'),splineFit)
         
         logging.info("Spline background removal done")
         
         #### Median detrending
-        mov,medianVector = median_trend_removal(mov)
+        mov,medianVector = median_trend_removal(mov, window = window)
         
-        np.save(os.path.join(folderName, 'medianTrend.npy'),medianVector)
+        np.save(os.path.join(noiseName, 'medianTrend.npy'),medianVector)
         
         logging.info('Median detrending done')
         
